@@ -1,0 +1,184 @@
+import sys
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QListWidget, QPushButton, QLineEdit, QTextEdit, QComboBox,
+                             QLabel, QMessageBox)
+from PyQt5.QtCore import Qt
+import sqlite3
+
+
+class NoteApplication(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Менеджер заметок")
+        self.setGeometry(100, 100, 800, 600)
+
+        self.initialize_database()
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+
+        self.main_layout = QHBoxLayout()
+        self.central_widget.setLayout(self.main_layout)
+
+        self.left_section = QVBoxLayout()
+
+        self.notes_list_widget = QListWidget()
+        self.notes_list_widget.itemClicked.connect(self.display_selected_note)
+        self.left_section.addWidget(self.notes_list_widget)
+
+        self.create_button = QPushButton("Новая заметка")
+        self.create_button.clicked.connect(self.create_new_note)
+        self.left_section.addWidget(self.create_button)
+
+        self.remove_button = QPushButton("Удалить заметку")
+        self.remove_button.clicked.connect(self.remove_selected_note)
+        self.left_section.addWidget(self.remove_button)
+
+        self.right_section = QVBoxLayout()
+
+        self.title_label = QLabel("Заголовок:")
+        self.right_section.addWidget(self.title_label)
+
+        self.title_input = QLineEdit()
+        self.right_section.addWidget(self.title_input)
+
+        self.priority_label = QLabel("Приоритет:")
+        self.right_section.addWidget(self.priority_label)
+
+        self.priority_selector = QComboBox()
+        self.priority_selector.addItems(["Высокий", "Средний", "Низкий", "Без приоритета"])
+        self.right_section.addWidget(self.priority_selector)
+
+        self.content_label = QLabel("Содержание:")
+        self.right_section.addWidget(self.content_label)
+
+        self.content_input = QTextEdit()
+        self.right_section.addWidget(self.content_input)
+
+        self.save_button = QPushButton("Сохранить")
+        self.save_button.clicked.connect(self.store_note)
+        self.right_section.addWidget(self.save_button)
+
+        self.main_layout.addLayout(self.left_section, 1)
+        self.main_layout.addLayout(self.right_section, 2)
+
+        self.refresh_notes_list()
+
+        self.active_note_id = None
+
+    def initialize_database(self):
+        """Инициализация базы данных"""
+        self.database_connection = sqlite3.connect('notes.db')
+        self.database_cursor = self.database_connection.cursor()
+
+        self.database_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT,
+                priority TEXT
+            )
+        ''')
+        self.database_connection.commit()
+
+    def refresh_notes_list(self):
+        """Загрузка списка заметок"""
+        self.notes_list_widget.clear()
+        self.database_cursor.execute("SELECT id, title, priority FROM notes ORDER BY "
+                              "CASE priority "
+                              "WHEN 'Высокий' THEN 1 "
+                              "WHEN 'Средний' THEN 2 "
+                              "WHEN 'Низкий' THEN 3 "
+                              "ELSE 4 END, title")
+        notes_data = self.database_cursor.fetchall()
+
+        for note in notes_data:
+            note_id, title_text, note_priority = note
+            display_text = f"{title_text} ({note_priority})" if note_priority != "Без приоритета" else title_text
+            self.notes_list_widget.addItem(display_text)
+            self.notes_list_widget.item(self.notes_list_widget.count() - 1).setData(Qt.UserRole, note_id)
+
+    def display_selected_note(self, selected_item):
+        """Загрузка выбранной заметки для редактирования"""
+        note_id = selected_item.data(Qt.UserRole)
+        self.database_cursor.execute("SELECT title, content, priority FROM notes WHERE id=?", (note_id,))
+        note_data = self.database_cursor.fetchone()
+
+        if note_data:
+            self.active_note_id = note_id
+            note_title, note_content, note_priority = note_data
+            self.title_input.setText(note_title)
+            self.content_input.setPlainText(note_content if note_content else "")
+
+            priority_index = self.priority_selector.findText(note_priority)
+            if priority_index >= 0:
+                self.priority_selector.setCurrentIndex(priority_index)
+
+    def create_new_note(self):
+        """Создание новой заметки"""
+        self.active_note_id = None
+        self.title_input.clear()
+        self.content_input.clear()
+        self.priority_selector.setCurrentIndex(3)  # "Без приоритета"
+        self.title_input.setFocus()
+
+    def store_note(self):
+        """Сохранение заметки"""
+        note_title = self.title_input.text().strip()
+        note_content = self.content_input.toPlainText().strip()
+        note_priority = self.priority_selector.currentText()
+
+        if not note_title:
+            QMessageBox.warning(self, "Ошибка", "Заголовок заметки не может быть пустым!")
+            return
+
+        if self.active_note_id:
+            self.database_cursor.execute("UPDATE notes SET title=?, content=?, priority=? WHERE id=?",
+                                  (note_title, note_content, note_priority, self.active_note_id))
+        else:
+            self.database_cursor.execute("INSERT INTO notes (title, content, priority) VALUES (?, ?, ?)",
+                                  (note_title, note_content, note_priority))
+
+        self.database_connection.commit()
+        self.refresh_notes_list()
+
+        if not self.active_note_id:
+            self.database_cursor.execute("SELECT id FROM notes WHERE title=?", (note_title,))
+            new_note_id = self.database_cursor.fetchone()[0]
+            self.active_note_id = new_note_id
+
+        for i in range(self.notes_list_widget.count()):
+            if self.notes_list_widget.item(i).data(Qt.UserRole) == self.active_note_id:
+                self.notes_list_widget.setCurrentRow(i)
+                break
+
+    def remove_selected_note(self):
+        """Удаление выбранной заметки"""
+        selected_note = self.notes_list_widget.currentItem()
+        if not selected_note:
+            QMessageBox.warning(self, "Ошибка", "Выберите заметку для удаления!")
+            return
+
+        note_id = selected_note.data(Qt.UserRole)
+
+        confirmation = QMessageBox.question(self, 'Подтверждение',
+                                       'Вы уверены, что хотите удалить эту заметку?',
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if confirmation == QMessageBox.Yes:
+            self.database_cursor.execute("DELETE FROM notes WHERE id=?", (note_id,))
+            self.database_connection.commit()
+            self.refresh_notes_list()
+            self.create_new_note()
+
+    def closeEvent(self, event):
+        """Закрытие соединения с БД при закрытии приложения"""
+        self.database_connection.close()
+        event.accept()
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = NoteApplication()
+    window.show()
+    sys.exit(app.exec_())
