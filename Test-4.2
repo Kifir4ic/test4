@@ -1,0 +1,237 @@
+import sqlite3
+import sys
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QTextEdit, QPushButton, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QMessageBox,
+                             QInputDialog, QLineEdit, QSpinBox)
+from PyQt5.QtCore import Qt
+
+class NotesManager(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initialize_database()
+        self.setup_interface()
+        self.refresh_notes_table()
+
+    def initialize_database(self):
+        self.database_connection = sqlite3.connect("notes.db")
+        self.database_cursor = self.database_connection.cursor()
+        self.database_cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT,
+                priority INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.database_connection.commit()
+    def setup_interface(self):
+        self.setWindowTitle("Менеджер заметок")
+        self.setGeometry(100, 100, 1200, 600)
+        self.setStyleSheet("""
+            QWidget {
+                font-size: 14px;
+            }
+            QPushButton {
+                padding: 5px;
+                min-width: 100px;
+            }
+            QTableWidget {
+                selection-background-color: #d4e6ff;
+            }
+        """)
+        main_container = QVBoxLayout()
+        main_container.setSpacing(15)
+
+        header_label = QLabel("Мои заметки")
+        header_label.setAlignment(Qt.AlignCenter)
+        header_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        main_container.addWidget(header_label)
+
+        self.notes_table = QTableWidget()
+        self.notes_table.setColumnCount(5)
+        self.notes_table.setHorizontalHeaderLabels(["ID", "Заметка", "Приоритет", "Дата создания", "Действия"])
+        self.notes_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.notes_table.setColumnWidth(0, 60)
+        self.notes_table.setColumnWidth(2, 100)
+        self.notes_table.setColumnWidth(3, 150)
+        self.notes_table.setColumnWidth(4, 200)
+        self.notes_table.verticalHeader().setVisible(False)
+        self.notes_table.setSelectionBehavior(QTableWidget.SelectRows)
+        main_container.addWidget(self.notes_table)
+      
+        control_buttons = QHBoxLayout()
+        control_buttons.setSpacing(10)
+
+        self.add_note_button = QPushButton("Добавить")
+        self.add_note_button.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.add_note_button.clicked.connect(self.open_add_note_dialog)
+        control_buttons.addWidget(self.add_note_button)
+
+        self.edit_note_button = QPushButton("Изменить")
+        self.edit_note_button.setStyleSheet("background-color: #2196F3; color: white;")
+        self.edit_note_button.clicked.connect(self.modify_note)
+        control_buttons.addWidget(self.edit_note_button)
+
+        self.reload_button = QPushButton("Обновить")
+        self.reload_button.setStyleSheet("background-color: #FFC107; color: black;")
+        self.reload_button.clicked.connect(self.refresh_notes_table)
+        control_buttons.addWidget(self.reload_button)
+
+        main_container.addLayout(control_buttons)
+        self.setLayout(main_container)
+
+    def add_note_to_table(self, note_id, note_text, note_priority, creation_date):
+        current_row = self.notes_table.rowCount()
+        self.notes_table.insertRow(current_row)
+
+        self.notes_table.setItem(current_row, 0, QTableWidgetItem(str(note_id)))
+        self.notes_table.setItem(current_row, 1, QTableWidgetItem(note_text))
+        self.notes_table.setItem(current_row, 2, QTableWidgetItem(str(note_priority)))
+        self.notes_table.setItem(current_row, 3, QTableWidgetItem(creation_date))
+      
+        action_buttons = QHBoxLayout()
+        buttons_container = QWidget()
+        
+        edit_button = QPushButton("✏️")
+        edit_button.setToolTip("Редактировать")
+        edit_button.setStyleSheet("padding: 2px; min-width: 30px;")
+        edit_button.clicked.connect(lambda: self.modify_note(current_row))
+        action_buttons.addWidget(edit_button)
+
+        delete_button = QPushButton("🗑️")
+        delete_button.setToolTip("Удалить")
+        delete_button.setStyleSheet("padding: 2px; min-width: 30px;")
+        delete_button.clicked.connect(lambda: self.remove_note(current_row))
+        action_buttons.addWidget(delete_button)
+
+        buttons_container.setLayout(action_buttons)
+        self.notes_table.setCellWidget(current_row, 4, buttons_container)
+
+    def refresh_notes_table(self):
+        self.notes_table.setRowCount(0)
+        self.database_cursor.execute("SELECT id, text, priority, datetime(created_at, 'localtime') FROM notes ORDER BY priority DESC, created_at DESC")
+        notes_data = self.database_cursor.fetchall()
+        for note in notes_data:
+            self.add_note_to_table(note[0], note[1], note[2], note[3])
+
+    def open_add_note_dialog(self):
+        dialog_window = QWidget()
+        dialog_window.setWindowTitle("Добавить заметку")
+        dialog_window.setFixedSize(400, 200)
+        
+        dialog_layout = QVBoxLayout()
+        
+        note_content_input = QTextEdit()
+        note_content_input.setPlaceholderText("Введите текст заметки...")
+        dialog_layout.addWidget(note_content_input)
+        
+        priority_selector = QHBoxLayout()
+        priority_selector.addWidget(QLabel("Приоритет:"))
+        
+        priority_input = QSpinBox()
+        priority_input.setRange(1, 5)
+        priority_input.setValue(3)
+        priority_selector.addWidget(priority_input)
+        dialog_layout.addLayout(priority_selector)
+        
+        dialog_buttons = QHBoxLayout()
+        confirm_button = QPushButton("Сохранить")
+        confirm_button.clicked.connect(lambda: self.insert_new_note(note_content_input.toPlainText(), priority_input.value()))
+        confirm_button.clicked.connect(dialog_window.close)
+        dialog_buttons.addWidget(confirm_button)
+        
+        cancel_button = QPushButton("Отмена")
+        cancel_button.clicked.connect(dialog_window.close)
+        dialog_buttons.addWidget(cancel_button)
+        
+        dialog_layout.addLayout(dialog_buttons)
+        dialog_window.setLayout(dialog_layout)
+        dialog_window.exec_()
+
+    def insert_new_note(self, note_content, priority_level):
+        if not note_content.strip():
+            QMessageBox.warning(self, "Ошибка", "Текст заметки не может быть пустым!")
+            return
+            
+        self.database_cursor.execute("INSERT INTO notes (text, priority) VALUES (?, ?)", (note_content, priority_level))
+        self.database_connection.commit()
+        self.refresh_notes_table()
+        QMessageBox.information(self, "Успех", "Заметка успешно добавлена!")
+
+    def modify_note(self, selected_row=None):
+        if selected_row is None:
+            selected_row = self.notes_table.currentRow()
+        
+        if selected_row == -1:
+            QMessageBox.warning(self, "Ошибка", "Выберите заметку для редактирования!")
+            return
+
+        note_identifier = int(self.notes_table.item(selected_row, 0).text())
+        current_content = self.notes_table.item(selected_row, 1).text()
+        current_priority = int(self.notes_table.item(selected_row, 2).text())
+
+        edit_dialog = QWidget()
+        edit_dialog.setWindowTitle("Редактировать заметку")
+        edit_dialog.setFixedSize(400, 200)
+        
+        edit_layout = QVBoxLayout()
+        
+        content_editor = QTextEdit()
+        content_editor.setPlainText(current_content)
+        edit_layout.addWidget(content_editor)
+        
+        priority_editor = QHBoxLayout()
+        priority_editor.addWidget(QLabel("Приоритет:"))
+        
+        priority_spinner = QSpinBox()
+        priority_spinner.setRange(1, 5)
+        priority_spinner.setValue(current_priority)
+        priority_editor.addWidget(priority_spinner)
+        edit_layout.addLayout(priority_editor)
+        
+        edit_buttons = QHBoxLayout()
+        save_button = QPushButton("Сохранить")
+        save_button.clicked.connect(lambda: self.save_note_changes(note_identifier, content_editor.toPlainText(), priority_spinner.value()))
+        save_button.clicked.connect(edit_dialog.close)
+        edit_buttons.addWidget(save_button)
+        
+        cancel_button = QPushButton("Отмена")
+        cancel_button.clicked.connect(edit_dialog.close)
+        edit_buttons.addWidget(cancel_button)
+        
+        edit_layout.addLayout(edit_buttons)
+        edit_dialog.setLayout(edit_layout)
+        edit_dialog.exec_()
+
+    def save_note_changes(self, note_id, updated_content, new_priority):
+        if not updated_content.strip():
+            QMessageBox.warning(self, "Ошибка", "Текст заметки не может быть пустым!")
+            return
+            
+        self.database_cursor.execute("UPDATE notes SET text = ?, priority = ? WHERE id = ?", 
+                          (updated_content, new_priority, note_id))
+        self.database_connection.commit()
+        self.refresh_notes_table()
+        QMessageBox.information(self, "Успех", "Заметка успешно обновлена!")
+
+    def remove_note(self, row_index):
+        confirmation = QMessageBox.question(self, "Подтверждение", 
+                                   "Вы уверены, что хотите удалить эту заметку?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if confirmation == QMessageBox.Yes:
+            note_id = int(self.notes_table.item(row_index, 0).text())
+            self.database_cursor.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            self.database_connection.commit()
+            self.refresh_notes_table()
+            QMessageBox.information(self, "Успех", "Заметка успешно удалена!")
+
+    def closeEvent(self, event):
+        self.database_connection.close()
+        event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    notes_app = NotesManager()
+    notes_app.show()
+    sys.exit(app.exec_())
